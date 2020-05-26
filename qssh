@@ -1,0 +1,381 @@
+#!/bin/bash
+
+version="1.0.0"
+black="\033[30m"
+red="\033[31m"
+green="\033[32m"
+yellow="\033[33m"
+blue="\033[34m"
+purple="\033[35m"
+orange="\033[36m"
+#white="\033[37m";
+reset="\033[0m"
+
+localSshConfigFile=~/.ssh/config
+remoteSshConfigFile=.ssh/config
+sshDirectory=~/.ssh
+sshKeyFile=$sshDirectory/id_rsa
+
+trap 'echo -e -n "${reset}"' EXIT
+
+function parseInput() {
+  while [[ $# -gt 0 ]]; do
+    key="$1"
+    case $key in
+    -n | --name)
+      name="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    -p | --port)
+      port="$2"
+      shift # past argumentG
+      shift # past value
+      ;;
+    -l | --localPorts)
+      localPorts="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    -r | --remotePorts)
+      remotePorts="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    *)
+      address=${1}
+      shift # past argument
+      ;;
+    esac
+  done
+  [[ ${address} == *"@"* ]] && user=${address%@*}
+  hostString=${address##*@}
+  host=${hostString%:*}
+  [[ -z "${port}" ]] && [[ ${hostString} == *":"* ]] && port=${hostString##*:}
+  [[ -z "${port}" ]] && port=22
+  [[ -z "${name}" ]] && name=${host}
+
+  copyIdAddressString=""
+  [[ -n "${user}" ]] && copyIdAddressString="${user}@"
+  copyIdAddressString=${copyIdAddressString}${host}
+  [[ -n "${port}" ]] && [[ -n "${user}" ]] && copyIdAddressString="-p ${port} ${copyIdAddressString}"
+  sshAddressString=""
+  [[ -n "${user}" ]] && sshAddressString="${user}@"
+  sshAddressString=${sshAddressString}${host}
+  sshParametersString=""
+  [[ -n "${port}" ]] && [[ -n "${user}" ]] && sshParametersString="-P ${port}"
+  jumpAddress=""
+  [[ -n "${user}" ]] && jumpAddress="${user}@"
+  jumpAddress=${jumpAddress}${host}
+  [[ -n "${port}" ]] && [[ -n "${user}" ]] && jumpAddress="${jumpAddress}:${port}"
+
+}
+
+function deleteEntry() {
+  # Delete old config entry
+  # 1. Delete all empty lines
+  # 2. Add an empty line before each Host entry
+  # 3. Delete Host ${1} until next empty line
+  # 4. Delete all trailing blank lines at end of file
+  # shellcheck disable=SC1003
+  sed <"${2}" '/^$/d;s/Host /\'$'\n&/' | sed '/^Host '"${1}"'$/,/^$/d;' | sed -e :a -e '/^\n*$/{$d;N;};/\n$/ba' >"${2}.tmp"
+  mv "${2}.tmp" "${2}"
+}
+
+function addHost() {
+  parseInput "$@"
+  deleteEntry "${name}" "${localSshConfigFile}"
+
+  # Write ssh config entry
+  {
+    echo ""
+    echo "Host ${name}"
+    echo "HostName ${host}"
+    echo "User ${user}"
+    echo "Port ${port}"
+  } >>~/.ssh/config
+  for port in $(echo "${localPorts}" | tr ',' '\n'); do
+    echo "LocalForward ${port} 127.0.0.1:${port}" >>~/.ssh/config
+  done
+  for port in $(echo "${remotePorts}" | tr ',' '\n'); do
+    echo "RemoteForward ${port} 127.0.0.1:${port}" >>~/.ssh/config
+  done
+}
+
+function addProxy() {
+  parseInput "$@"
+
+  # Get SSH config from proxy
+  configFile=$(mktemp)
+  # shellcheck disable=SC2086
+  scp ${sshParametersString} "${sshAddressString}":"${remoteSshConfigFile}" "${configFile}" >/dev/null
+
+  # 1. Add an empty line before each Host entry
+  # 2. Add blank line at end of file
+  # shellcheck disable=SC1003
+  sed <"${configFile}" '/^$/d;s/Host /\'$'\n&/' >"${configFile}.tmp"
+  echo "" >>"${configFile}.tmp"
+  mv "${configFile}.tmp" "${configFile}"
+
+  echo -e "${purple}Adding hosts from proxy ${black}${host}${purple}...${black}"
+
+  # Parse remote SSH config
+  # shellcheck disable=SC2013
+  for targetHost in $(awk '/[hH]ost / { print $2 }' RS= "${configFile}"); do
+    targetHostname=$(awk -v name="$targetHost" -v RS= '$0 ~ "[hH]ost " name "\n"' "${configFile}" | awk '/[hH]ost[nN]ame/ { print $2 }')
+    targetUser=$(awk -v name="$targetHost" -v RS= '$0 ~ "[hH]ost " name "\n"' "${configFile}" | awk '/[uU]ser/ { print $2 }')
+    targetPort=$(awk -v name="$targetHost" -v RS= '$0 ~ "[hH]ost " name "\n"' "${configFile}" | awk '/[pP]ort/ { print $2 }')
+    [[ -z "${targetPort}" ]] && targetPort=22
+
+    # Skip entries without localhost
+    [[ ! ${targetHostname} == "localhost" ]] && [[ ! ${targetHostname} == "127.0.0.1" ]] && continue
+
+    echo "${targetHost}"
+
+    deleteEntry "${targetHost}" "${localSshConfigFile}"
+
+    # Save entry in local SSH config
+    {
+      echo ""
+      echo "Host $targetHost"
+      echo "HostName ${targetHostname}"
+      echo "User ${targetUser}"
+      echo "Port ${targetPort}"
+      echo "ProxyJump ${jumpAddress}"
+    } >>~/.ssh/config
+  done
+}
+
+function writeRemoteConfig() {
+  name=${1}
+
+  echo -e -n "🔮 ${purple}Searching for available port for ${black}${name} ${purple}... "
+  configFile=$(mktemp)
+  # shellcheck disable=SC2086
+  scp ${sshParametersString} "${sshAddressString}":"${remoteSshConfigFile}" "${configFile}" >/dev/null 2>&1
+  deleteEntry "${name}" "${configFile}"
+  # Get list of available ports
+  # shellcheck disable=SC2013
+  availablePorts=$(for host in $(awk '/[hH]ost / { print $2 }' RS= "${configFile}"); do
+    port=$(awk -v name="${host}" -v RS= '$0 ~ "[hH]ost " name "\n"' "${configFile}" | awk '/[pP]ort/ { print $2 }')
+    if [[ ${port} == "" ]]; then
+      port=22
+    fi
+    echo -n "${port} "
+  done)
+  # Scan list of available ports until a free port ist found
+  for i in $(seq 50000 1 59999); do
+    if [[ ! $availablePorts == *"$i"* ]]; then
+      port=$i
+      break
+    fi
+  done
+  echo "${port} ✅  "
+
+  echo -e -n "🔮 ${purple}Updating server SSH config for ${black}${name} ${purple}... "
+  # Write ssh config entry
+  {
+    echo ""
+    echo "Host ${name}"
+    echo "HostName localhost"
+    echo "User $(whoami)"
+    echo "Port ${port}"
+  } >>"${configFile}"
+  # shellcheck disable=SC2086
+  scp ${sshParametersString} "${configFile}" "${sshAddressString}":"${remoteSshConfigFile}" >/dev/null
+  echo "done ✅  "
+}
+
+# 1. Check autossh
+# 2. Stop backup autossh and ssh
+# 3. Check SSH directory
+# 4. Check SSH key
+# 5. Copy SSH key to proxy
+# 6. Write backup entry in proxy config
+# 7. Start backup autossh
+# 8. Start Test tunnel over backup autossh
+# 9. Set backup crontab
+# 10. Write entry in proxy config
+# 11. Set crontab
+# 12. Stop and start autossh in one command because this may cause a logout
+#     (backup connection is still available if something goes wrong)
+
+function register() {
+  parseInput "$@"
+
+  echo -e "🔮 ${purple}Registering ${black}$(whoami)@$(hostname) ${purple}to ${black}${sshAddressString}"
+
+  echo -e -n "🔮 ${purple}Checking autossh... "
+  ! type "autossh" >/dev/null 2>&1 && echo -e "${red}not found ⛔️" && exit
+  echo "exists ✅  "
+
+  echo -e -n "🔮 ${purple}Stopping backup autossh... "
+  for process in $(pgrep -f "autossh.*$(hostname)-backup$"); do kill -9 "${process}"; done
+  for process in $(pgrep -f "ssh.*$(hostname)-backup$"); do kill -9 "${process}"; done
+  echo -e "${purple}done ✅  "
+
+  echo -e -n "🔮 ${purple}Checking SSH directory... "
+  if [ ! -d $sshDirectory ]; then
+    mkdir $sshDirectory
+    chmod 700 $sshDirectory
+    echo "created ✅  "
+  else
+    echo "exists ✅  "
+  fi
+
+  echo -e -n "🔮 ${purple}Checking SSH key... "
+  if [[ ! -f $sshKeyFile ]]; then
+    echo -e "${black}"
+    ssh-keygen -t rsa -b 4096
+    echo -e "${purple}created ✅  "
+  else
+    echo "exists ✅  "
+  fi
+
+  echo -e "🔮 ${purple}Copying SSH key to ${black}${sshAddressString}... "
+  # shellcheck disable=SC2086
+  ssh-copy-id ${copyIdAddressString}
+  echo -e "${purple}done ✅  "
+
+  writeRemoteConfig "$(hostname)-backup"
+
+  echo -e -n "🔮 ${purple}Starting backup autossh... "
+  autossh="autossh -f -M 0 ${sshAddressString} -N -R ${port}:localhost:22"
+  autossh="$autossh -o ConnectTimeout=1 -o ExitOnForwardFailure=yes $(hostname)-backup"
+  $autossh
+  echo "done ✅  "
+
+  echo -e "🔮 ${purple}Testing backup tunnel to ${black}$(whoami)@$(hostname) ${purple}over ${black}${sshAddressString} ${purple}...${black}"
+  # shellcheck disable=SC2086
+  # shellcheck disable=SC2046
+  status=$(ssh -J ${jumpAddress} $(whoami)@localhost -p ${port} "echo ok")
+  if [[ ! $status == "ok" ]]; then
+      echo -e "${red}error ⛔  "
+      exit
+  else
+      echo -e "${purple}connected ✅  "
+  fi
+
+  echo -e -n "🔮 ${purple}Setting up backup crontab... "
+  # Remove old entries
+  crontab -l | grep -v "autossh.*$(hostname)-backup$" | crontab -
+  # Add new entry
+  (
+    crontab -l
+    echo "@reboot $autossh"
+  ) | crontab -
+  echo "done ✅  "
+
+  writeRemoteConfig "$(hostname)"
+
+  autossh="autossh -f -M 0 ${sshAddressString} -N -R ${port}:localhost:22"
+  for localPort in $(echo "${localPorts}" | tr ',' '\n'); do
+    autossh="$autossh -L ${localPort}:localhost:${localPort}"
+  done
+  for remotePort in $(echo "${remotePorts}" | tr ',' '\n'); do
+    autossh="$autossh -R ${remotePort}:localhost:${remotePort}"
+  done
+  autossh="$autossh -o ConnectTimeout=1 -o ExitOnForwardFailure=yes $(hostname)"
+
+  echo -e -n "🔮 ${purple}Setting up crontab... "
+  # Remove old entries
+  crontab -l | grep -v "autossh.*$(hostname)$" | crontab -
+  # Add new entry
+  (
+    crontab -l
+    echo "@reboot $autossh"
+  ) | crontab -
+  echo "done ✅  "
+
+  echo -e "🔮 ${purple}Restarting autossh... "
+  executeFile=$(mktemp)
+  {
+    echo "for process in \$(pgrep -f \"autossh.*$(hostname)$\"); do kill -9 \"\${process}\"; done"
+    echo "for process in \$(pgrep -f \"ssh.*$(hostname)$\"); do kill -9 \"\${process}\"; done"
+    echo "sleep 5"
+    echo "${autossh}"
+  } > "${executeFile}"
+  chmod +x "${executeFile}"
+  nohup "${executeFile}" >/dev/null 2>&1 &
+}
+
+function listConnections() {
+  # Collect data
+  hostsFile=$(mktemp)
+  usersFile=$(mktemp)
+  hostNamesFile=$(mktemp)
+  portsFile=$(mktemp)
+  localPortsFile=$(mktemp)
+  remotePortsFile=$(mktemp)
+  jumpAddressesFile=$(mktemp)
+
+  # 1. Add an empty line before each Host entry
+  # 2. Add blank line at end of file
+  # shellcheck disable=SC1003
+  sed <"${localSshConfigFile}" '/^$/d;s/Host /\'$'\n&/' >"${localSshConfigFile}.tmp"
+  echo "" >>"${localSshConfigFile}.tmp"
+
+  # shellcheck disable=SC2013
+  for host in $(awk '/[hH]ost / { print $2 }' RS= ${localSshConfigFile}.tmp); do
+    echo -e "${black}| ${host}" >>"${hostsFile}"
+    user=$(awk -v name="${host}" -v RS= '$0 ~ "[hH]ost " name "\n"' ~/.ssh/config | awk '/[uU]ser/ { print $2 }')
+    echo -e "${black}| ${red}${user}" >>"${usersFile}"
+    hostname=$(awk -v name="${host}" -v RS= '$0 ~ "[hH]ost " name "\n"' ~/.ssh/config | awk '/[hH]ost[nN]ame/ { print $2 }')
+    echo -e "${black}| ${orange}${hostname}" >>"${hostNamesFile}"
+    port=$(awk -v name="${host}" -v RS= '$0 ~ "[hH]ost " name "\n"' ~/.ssh/config | awk '/[pP]ort/ { print $2 }')
+    [[ -z ${port} ]] && port=22
+    echo -e "${black}| ${yellow}${port}" >>"${portsFile}"
+    localPorts=$(awk -v name="${host}" -v RS= '$0 ~ "[hH]ost " name "\n"' ~/.ssh/config | awk '/[lL]ocal[fF]orward/ { print $2 }' | awk -v ORS=" " '{ print $1 }')
+    echo -e "${black}| ${green}$localPorts" >>"${localPortsFile}"
+    remotePorts=$(awk -v name="${host}" -v RS= '$0 ~ "[hH]ost " name "\n"' ~/.ssh/config | awk '/[rR]emote[fF]orward/ { print $2 }' | awk -v ORS=" " '{ print $1 }')
+    echo -e "${black}| ${blue}$remotePorts" >>"${remotePortsFile}"
+    jumpAddresses=$(awk -v name="${host}" -v RS= '$0 ~ "[hH]ost " name "\n"' ~/.ssh/config | awk '/[pP]roxy[jJ]ump/ { print $2 }' | awk -v ORS=" " '{ print $1 }')
+    echo -e "${black}| ${purple}$jumpAddresses" >>"${jumpAddressesFile}"
+  done
+
+  rm "${localSshConfigFile}.tmp"
+
+  # Get highest line length
+  allFile=$(mktemp)
+  cat "${hostsFile}" "${usersFile}" "${hostNamesFile}" "${portsFile}" "${localPortsFile}" "${remotePortsFile}" "${jumpAddressesFile}" >"${allFile}"
+  length=$(awk '{print length, $0}' "${allFile}" | sort -nr | head -1 | cut -d " " -f1)
+
+  # Draw list
+  echo -e -n "${black}"
+  echo "QSSH Version ${version}"
+  for i in $(seq 1 1 7); do for j in $(seq 1 1 $((length - 8))); do echo -n =; done; done
+  echo
+  echo -e "${black}| Name\t${black}| ${red}User\t${black}| ${orange}Host\t${black}| ${yellow}SSH Port\t${black}| ${green}Ingoing Ports\t${black}| ${blue}Outgoing Ports\t${black}| ${purple}Proxy" | expand -t ${length}
+  echo -e -n "${black}"
+  # shellcheck disable=SC2034
+  for i in $(seq 1 1 7); do for j in $(seq 1 1 $((length - 8))); do echo -n =; done; done
+  echo
+  paste "${hostsFile}" "${usersFile}" "${hostNamesFile}" "${portsFile}" "${localPortsFile}" "${remotePortsFile}" "${jumpAddressesFile}" | expand -t ${length} | sort -k6
+}
+
+# Get command
+if [[ $# -eq 0 ]]; then
+  listConnections
+  exit
+fi
+command=$1
+case $command in
+addHost)
+  shift
+  addHost "$@"
+  ;;
+addProxy)
+  shift
+  addProxy "$@"
+  ;;
+fetch) ;;
+
+register)
+  shift
+  register "$@"
+  ;;
+*)
+  ssh "$@"
+  shift
+  ;;
+esac
