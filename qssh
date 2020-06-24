@@ -1,6 +1,6 @@
 #!/bin/bash
 
-version="1.0.0"
+version="1.0.1"
 black="\033[30m"
 red="\033[31m"
 green="\033[32m"
@@ -39,6 +39,16 @@ function parseInput() {
       ;;
     -r | --remotePorts)
       remotePorts="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    -L)
+      localForwardRules="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    -R)
+      remoteForwardRules="$2"
       shift # past argument
       shift # past value
       ;;
@@ -274,6 +284,12 @@ function register() {
   done
   for remotePort in $(echo "${remotePorts}" | tr ',' '\n'); do
     autossh="$autossh -R ${remotePort}:localhost:${remotePort}"
+  done
+  for localForwardRule in $(echo "${localForwardRules}" | tr ',' '\n'); do
+    autossh="$autossh -L ${localForwardRule}"
+  done
+  for remoteForwardRule in $(echo "${remoteForwardRules}" | tr ',' '\n'); do
+    autossh="$autossh -R ${remoteForwardRule}"
   done
   autossh="$autossh -o ConnectTimeout=1 -o ExitOnForwardFailure=yes $(hostname)"
 
