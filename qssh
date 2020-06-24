@@ -210,8 +210,8 @@ function register() {
   echo "exists ✅  "
 
   echo -e -n "🔮 ${purple}Stopping backup autossh... "
-  for process in $(pgrep -f "autossh.*$(hostname)-backup$"); do kill -9 "${process}"; done
-  for process in $(pgrep -f "ssh.*$(hostname)-backup$"); do kill -9 "${process}"; done
+  for process in $(pgrep -f "autossh.*${sshAddressString}.*$(hostname)-backup$"); do kill -9 "${process}"; done
+  for process in $(pgrep -f "ssh.*${sshAddressString}.*$(hostname)-backup$"); do kill -9 "${process}"; done
   echo -e "${purple}done ✅  "
 
   echo -e -n "🔮 ${purple}Checking SSH directory... "
@@ -258,7 +258,7 @@ function register() {
 
   echo -e -n "🔮 ${purple}Setting up backup crontab... "
   # Remove old entries
-  crontab -l | grep -v "autossh.*$(hostname)-backup$" | crontab -
+  crontab -l | grep -v "autossh.*${sshAddressString}.*$(hostname)-backup$" | crontab -
   # Add new entry
   (
     crontab -l
@@ -279,7 +279,7 @@ function register() {
 
   echo -e -n "🔮 ${purple}Setting up crontab... "
   # Remove old entries
-  crontab -l | grep -v "autossh.*$(hostname)$" | crontab -
+  crontab -l | grep -v "autossh.*${sshAddressString}.*$(hostname)$" | crontab -
   # Add new entry
   (
     crontab -l
@@ -290,8 +290,8 @@ function register() {
   echo -e "🔮 ${purple}Restarting autossh... "
   executeFile=$(mktemp)
   {
-    echo "for process in \$(pgrep -f \"autossh.*$(hostname)$\"); do kill -9 \"\${process}\"; done"
-    echo "for process in \$(pgrep -f \"ssh.*$(hostname)$\"); do kill -9 \"\${process}\"; done"
+    echo "for process in \$(pgrep -f \"autossh.*${sshAddressString}.*$(hostname)$\"); do kill -9 \"\${process}\"; done"
+    echo "for process in \$(pgrep -f \"ssh.*${sshAddressString}.*$(hostname)$\"); do kill -9 \"\${process}\"; done"
     echo "sleep 5"
     echo "${autossh}"
   } > "${executeFile}"
