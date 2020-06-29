@@ -265,6 +265,7 @@ function register() {
   echo "done ✅  "
 
   echo -e "🔮 ${purple}Testing backup tunnel to ${black}$(whoami)@$(hostname) ${purple}over ${black}${sshAddressString} ${purple}...${black}"
+  sleep 5
   # shellcheck disable=SC2086
   # shellcheck disable=SC2046
   status=$(ssh -J ${jumpAddress} $(whoami)@localhost -p ${port} "echo ok")
