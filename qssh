@@ -11,6 +11,15 @@ orange="\033[36m"
 #white="\033[37m";
 reset="\033[0m"
 
+black="${reset}"
+red="${reset}"
+green="${reset}"
+yellow="${reset}"
+blue="${reset}"
+purple="${reset}"
+orange="${reset}"
+reset="${reset}"
+
 localSshConfigFile=~/.ssh/config
 remoteSshConfigFile=.ssh/config
 sshDirectory=~/.ssh
@@ -320,9 +329,6 @@ function listConnections() {
   hostsFile=$(mktemp)
   usersFile=$(mktemp)
   hostNamesFile=$(mktemp)
-  portsFile=$(mktemp)
-  localPortsFile=$(mktemp)
-  remotePortsFile=$(mktemp)
   jumpAddressesFile=$(mktemp)
 
   # 1. Add an empty line before each Host entry
@@ -338,13 +344,6 @@ function listConnections() {
     echo -e "${black}| ${red}${user}" >>"${usersFile}"
     hostname=$(awk -v name="${host}" -v RS= '$0 ~ "[hH]ost " name "\n"' ~/.ssh/config | awk '/[hH]ost[nN]ame/ { print $2 }')
     echo -e "${black}| ${orange}${hostname}" >>"${hostNamesFile}"
-    port=$(awk -v name="${host}" -v RS= '$0 ~ "[hH]ost " name "\n"' ~/.ssh/config | awk '/[pP]ort/ { print $2 }')
-    [[ -z ${port} ]] && port=22
-    echo -e "${black}| ${yellow}${port}" >>"${portsFile}"
-    localPorts=$(awk -v name="${host}" -v RS= '$0 ~ "[hH]ost " name "\n"' ~/.ssh/config | awk '/[lL]ocal[fF]orward/ { print $2 }' | awk -v ORS=" " '{ print $1 }')
-    echo -e "${black}| ${green}$localPorts" >>"${localPortsFile}"
-    remotePorts=$(awk -v name="${host}" -v RS= '$0 ~ "[hH]ost " name "\n"' ~/.ssh/config | awk '/[rR]emote[fF]orward/ { print $2 }' | awk -v ORS=" " '{ print $1 }')
-    echo -e "${black}| ${blue}$remotePorts" >>"${remotePortsFile}"
     jumpAddresses=$(awk -v name="${host}" -v RS= '$0 ~ "[hH]ost " name "\n"' ~/.ssh/config | awk '/[pP]roxy[jJ]ump/ { print $2 }' | awk -v ORS=" " '{ print $1 }')
     echo -e "${black}| ${purple}$jumpAddresses" >>"${jumpAddressesFile}"
   done
@@ -353,20 +352,20 @@ function listConnections() {
 
   # Get highest line length
   allFile=$(mktemp)
-  cat "${hostsFile}" "${usersFile}" "${hostNamesFile}" "${portsFile}" "${localPortsFile}" "${remotePortsFile}" "${jumpAddressesFile}" >"${allFile}"
+  cat "${hostsFile}" "${usersFile}" "${hostNamesFile}" "${jumpAddressesFile}" >"${allFile}"
   length=$(awk '{print length, $0}' "${allFile}" | sort -nr | head -1 | cut -d " " -f1)
 
   # Draw list
   echo -e -n "${black}"
   echo "QSSH Version ${version}"
-  for i in $(seq 1 1 7); do for j in $(seq 1 1 $((length - 8))); do echo -n =; done; done
+  for i in $(seq 1 1 4); do for j in $(seq 1 1 $((length - 8))); do echo -n =; done; done
   echo
-  echo -e "${black}| Name\t${black}| ${red}User\t${black}| ${orange}Host\t${black}| ${yellow}SSH Port\t${black}| ${green}Ingoing Ports\t${black}| ${blue}Outgoing Ports\t${black}| ${purple}Proxy" | expand -t ${length}
+  echo -e "${black}| Name\t${black}| ${red}User\t${black}| ${orange}Host\t${black}| ${purple}Proxy" | expand -t ${length}
   echo -e -n "${black}"
   # shellcheck disable=SC2034
-  for i in $(seq 1 1 7); do for j in $(seq 1 1 $((length - 8))); do echo -n =; done; done
+  for i in $(seq 1 1 4); do for j in $(seq 1 1 $((length - 8))); do echo -n =; done; done
   echo
-  paste "${hostsFile}" "${usersFile}" "${hostNamesFile}" "${portsFile}" "${localPortsFile}" "${remotePortsFile}" "${jumpAddressesFile}" | expand -t ${length} | sort -k6
+  paste "${hostsFile}" "${usersFile}" "${hostNamesFile}" "${jumpAddressesFile}" | expand -t ${length} | sort -k6
 }
 
 # Get command
